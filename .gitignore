@@ -1,4 +1,5 @@
-기상봇.py
+# ❌ `tokens.py`를 깃허브에서 제외 (중요!!)
+tokens.py
 
 # Python 관련 불필요한 파일 무시
 __pycache__/
@@ -16,5 +17,6 @@ env/
 # 특정 폴더 제외
 temp/
 
-# JSON 파일은 깃허브에 포함
-# (보안상 민감한 JSON이 있다면 추가 제외 가능)
+# JSON 파일 포함 (보안상 민감한 JSON이 있다면 제외 가능)
+# study_data.json을 제외하려면 아래 주석 해제
+# study_data.json
