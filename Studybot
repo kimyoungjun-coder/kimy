@@ -1,0 +1,124 @@
+import discord
+from discord.ext import commands, tasks
+from datetime import datetime, timedelta, time
+import json
+import os
+from tokens import stoken, schid, rchid  # ✅ `tokens.py`에서 공부봇 설정 불러오기
+
+# 🔹 디스코드 봇 토큰
+TOKEN = stoken  # ✅ 공부봇 토큰 사용
+
+# 🔹 채널 ID 설정
+STUDY_CHANNEL_ID = schid  # ✅ 공부 인증 채널 ID
+RANK_CHANNEL_ID = rchid  # ✅ 공통 순위 공지 채널 ID
+
+# 🔹 JSON 파일 경로
+DATA_FILE = "study_data.json"
+
+# 🔹 봇 설정
+intents = discord.Intents.default()
+intents.messages = True
+intents.guilds = True
+intents.message_content = True
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+# 📌 JSON 데이터 불러오기 & 저장하기
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        return {"users": {}, "yesterday_rankings": [], "weekly_rankings": []}
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_data(data):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+
+# 📌 공부 인증 (`!공부 HH:MM`)
+@bot.command(name="공부", aliases=["study"])
+async def record_study(ctx):
+    message_content = ctx.message.content[len(ctx.prefix) + len(ctx.invoked_with):].strip()  # "!공부" 뒤의 모든 내용 가져오기
+
+    if ctx.channel.id != STUDY_CHANNEL_ID:
+        await ctx.send(f"{ctx.author.mention}, 이 명령어는 공부 인증 채널에서만 사용할 수 있습니다!")
+        return
+
+    if not message_content or ":" not in message_content:
+        await ctx.send(f"{ctx.author.mention}, 공부 시간을 `HH:MM` 형식으로 입력해주세요! (예: `!공부 1:45`)")
+        return
+
+    try:
+        hours, minutes = map(int, message_content.split(":"))
+        if hours < 0 or minutes < 0 or minutes >= 60:
+            raise ValueError
+    except ValueError:
+        await ctx.send(f"{ctx.author.mention}, 잘못된 형식입니다. `HH:MM` 형식으로 입력해주세요! (예: `!공부 2:30`)")  
+        return
+
+    if not ctx.message.attachments:
+        await ctx.send(f"{ctx.author.mention}, 인증 사진을 함께 업로드해야 공부 시간이 저장됩니다! 📸")
+        return
+
+    study_time = hours + (minutes / 60)  # 시간 단위로 변환
+    data = load_data()
+    user_id = str(ctx.author.id)
+
+    # 사용자의 마지막 공부 시간을 새로 저장 (누적X)
+    data["users"][user_id] = {
+        "total_study_time": study_time,
+        "weekly_study_time": study_time,
+        "photo_count": 1  # 가장 최근 인증만 반영
+    }
+
+    save_data(data)
+    await ctx.send(f"{ctx.author.mention}, {hours}시간 {minutes}분 공부 인증 완료! ✅ (이전 기록은 덮어씌워짐)")
+
+# 📌 매일 8시 어제 공부 TOP 3 공지
+@tasks.loop(time=time(8, 0))
+async def announce_daily_ranking():
+    data = load_data()
+    rankings = sorted(data["users"].items(), key=lambda x: x[1]["total_study_time"], reverse=True)[:3]
+    
+    rank_channel = bot.get_channel(RANK_CHANNEL_ID)
+    if rankings and rank_channel:
+        yesterday = (datetime.utcnow() + timedelta(hours=9) - timedelta(days=1)).strftime("%Y-%m-%d")
+        message = f"**📢 {yesterday} 공부 TOP 3!**\n"
+        for i, (user_id, user_data) in enumerate(rankings, start=1):
+            message += f"🥇 {i}위: <@{user_id}> ({user_data['total_study_time']:.2f}시간)\n"
+        await rank_channel.send(message)
+
+    data["yesterday_rankings"] = rankings
+    for user in data["users"].values():
+        user["total_study_time"] = 0
+    save_data(data)
+
+# 📌 매주 월요일 8시 주간 랭킹 공지
+@tasks.loop(time=time(8, 0))
+async def announce_weekly_ranking():
+    if datetime.today().weekday() != 0:  # 월요일(0) 체크
+        return
+
+    data = load_data()
+    rankings = sorted(data["users"].items(), key=lambda x: x[1]["weekly_study_time"], reverse=True)[:3]
+    
+    rank_channel = bot.get_channel(RANK_CHANNEL_ID)
+    if rankings and rank_channel:
+        end_date = (datetime.utcnow() + timedelta(hours=9) - timedelta(days=1)).strftime("%Y-%m-%d")
+        start_date = (datetime.utcnow() + timedelta(hours=9) - timedelta(days=7)).strftime("%Y-%m-%d")
+        message = f"**📢 {start_date} ~ {end_date} 공부 TOP 3! 🎯**\n"
+        for i, (user_id, user_data) in enumerate(rankings, start=1):
+            message += f"🥇 {i}위: <@{user_id}> ({user_data['weekly_study_time']:.2f}시간)\n"
+        await rank_channel.send(message)
+
+    for user in data["users"].values():
+        user["weekly_study_time"] = 0
+    save_data(data)
+
+# 📌 봇 실행
+@bot.event
+async def on_ready():
+    print(f"{bot.user.name} 봇이 실행되었습니다!")
+    announce_daily_ranking.start()
+    announce_weekly_ranking.start()
+
+bot.run(TOKEN)
